@@ -1,38 +1,54 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import axios from 'axios';
 
 function App() {
   const [transcription, setTranscription] = useState('');
-  const [partiialTranscription, setPartialTranscription] = useState('');
+  const [partialTranscription, setPartialTranscription] = useState('');
   const lastFinalTranscriptRef = useRef('');
-
   const [isRecording, setIsRecording] = useState(false);
-  const [ws, setWs] = useState(null);
+  const wsRef = useRef(null);
   const mediaRecorderRef = useRef(null);
 
-  const connectWebSocket = () => {
-    const newWs = new WebSocket('ws://localhost:3001');
+  const startMediaRecorder = () => {
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(stream => {
+        mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        mediaRecorderRef.current.ondataavailable = (event) => {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(event.data);
+          }
+        };
+        mediaRecorderRef.current.start(1000);
+        console.log("MediaRecorder started");
+      }).catch(error => {
+        console.error("Error getting media:", error);
+      });
+  };
 
+  const startRecording = () => {
+    setIsRecording(true);
+    wsRef.current = new WebSocket('ws://localhost:3001');
 
-      newWs.onopen = () => {
-        console.log("WebSocket connection established");
-      };
+    wsRef.current.onopen = () => {
+      console.log("WebSocket connection established");
+      startMediaRecorder();
+    };
 
-      newWs.onerror = (error) => {
-        console.error("WebSocket error:", error);
-      };
+    wsRef.current.onerror = (error) => {
+      console.error("WebSocket error:", error);
+    };
 
-      newWs.onclose = () => {
-        console.log("WebSocket connection closed, attempting to reconnect...");
-        setTimeout(connectWebSocket, 3000); // Attempt to reconnect after 3 seconds
-      };
-      newWs.onmessage = (event) => {
-        const received = JSON.parse(event.data);
+    wsRef.current.onclose = () => {
+      console.log("WebSocket connection closed");
+      wsRef.current = null;
+    };
+    wsRef.current.onmessage = (event) => {
+      const received = JSON.parse(event.data);
 
-        // Check if the received message has the expected structure
-        if (received && received.channel && received.channel.alternatives && received.channel.alternatives.length > 0) {
-          const { is_final, speech_final } = received;
-          const transcript = received.channel.alternatives[0].transcript;
+      // Check if the received message has the expected structure
+      if (received && received.channel && received.channel.alternatives && received.channel.alternatives.length > 0) {
+        const { is_final, speech_final } = received;
+        const transcript = received.channel.alternatives[0].transcript;
 
         console.log("transcript", transcript, "isfinal", is_final, "speechFinal", speech_final)
         if (transcript) {
@@ -67,79 +83,24 @@ function App() {
       };
 
     }
-
-
-      setWs(newWs);
-    }
-  useEffect(() => {
-    connectWebSocket();
-    return () => {
-      if (ws) {
-        ws.close();
-      }
-    };
-  }, []);
-    
-
-
-  // useEffect(() => {
-  //   console.log("My Last Final transcription in UE", lastFinalTranscript)
-  // }, [lastFinalTranscript])
-
-  const startRecording = () => {
-    console.log("Attempting to start recording...");
-
-    // Re-open WebSocket connection if it's closed
-    if (!ws || ws.readyState === WebSocket.CLOSED) {
-      connectWebSocket();
-    }
-
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(stream => {
-        console.log("Stream obtained");
-        if (!MediaRecorder.isTypeSupported('audio/webm')) {
-          console.error("audio/webm MIME type not supported");
-          return;
-        }
-
-        mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-        mediaRecorderRef.current.onstart = () => console.log("MediaRecorder started");
-        mediaRecorderRef.current.onerror = (error) => console.error("MediaRecorder error:", error);
-        mediaRecorderRef.current.start(1000); // Experiment with different timeslice values
-
-
-        mediaRecorderRef.current.addEventListener("dataavailable", event => {
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            // console.log("Sending audio data to server, size:", event.data.size);
-            ws.send(event.data);
-          } else {
-            console.log("WebSocket not ready or closed");
-          }
-        });
-
-        setIsRecording(true);
-      }).catch(error => {
-        console.error("Error getting media:", error);
-      });
+   
   };
 
   const stopRecording = () => {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
+      setTranscription('');
+      setPartialTranscription('');
+      lastFinalTranscriptRef.current = '';
 
-      // Close the WebSocket connection when stopping transcription
-      if (ws) {
-        ws.close();
-        setWs(null); // Reset WebSocket state
+      if (wsRef.current) {
+        wsRef.current.close();
       }
     } else {
       console.error('MediaRecorder not initialized');
     }
   };
-
-
-
 
   return (
     <div>
@@ -148,7 +109,7 @@ function App() {
         {isRecording ? 'Stop Recording' : 'Start Recording'}
       </button>
       {/* Display Partial Transcript in Grey */}
-      <p style={{ color: 'grey' }}>THIS IS PARTIAL TRANSCRIPTION : {partiialTranscription}</p>
+      <p style={{ color: 'grey' }}>THIS IS PARTIAL TRANSCRIPTION : {partialTranscription}</p>
       <p style={{ color: 'red' }}>THIS IS SEMI PARTIAL TRANSCRIPTION : {lastFinalTranscriptRef.current}</p>
 
       {/* Display Final Transcript in Black */}
